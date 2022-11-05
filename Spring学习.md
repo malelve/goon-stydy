@@ -120,13 +120,15 @@ Spring的IoC容器同时支持**属性注入**和**构造方法注入**，并**�
 1. 应用程序组件既可以在Spring的IoC容器中运行，也可以自己编写代码自行组装配置；
 2. 测试的时候并不依赖Spring容器，可单独进行测试，大大提高了开发效率。
 
+
+
 ##### 1.1.1.1 原理总结
 
-###### IoC配置方式
+###### IoC xml配置方式
 
 - 编写xml文档
 
-###### IoC注入方式
+###### IoC xml注入方式
 
 - 通过set方法属性注入
 - 通过构造方法注入
@@ -143,6 +145,18 @@ Spring的IoC容器同时支持**属性注入**和**构造方法注入**，并**�
 **问2**，延迟加载/懒加载不好吗，为什么Spring要在容器初始化时就加载全部Bean
 
 **答2**，Bean错了反正都会报错，不如直接在一开始就报错
+
+
+
+**问3**，多个重复id的Bean会报错吗？
+
+**答3**，分两个方面来答，
+
+首先如果是在同一个xml文件中声明了两个重复id的Bean，是肯定会报错的，而且错误发生在Spring容器初始话读取xml配置的时候，
+
+其次如果在不同xml文件里声明了id相同的Bean，那么在容器初始化的时候不会报错，Spring会覆盖掉id相同的Bean；
+
+但在Spring3.0版本，增添了@Configuration + @Bean注解，用于注册第三方Bean，此时如果有两个重复的Bean，那么在容器初始化的时候不会报错，在使用的时候也不会报错，会默认使用第一个Bean，后续id相同的Bean也不会去注册但我们可以使用@Bean("name")或@Qualifier()注解来给Bean取名使其id不同。
 
 
 
@@ -379,11 +393,496 @@ public class AppConfig {
 
 
 
+#### 1.1.5 使用配置类来配置
+
+之前我们使用xml文件配置，在方法中编写set方法/构造方法来注入
+
+现在我们使用@Configuration来编写配置类来配置啦！！！
+
+@Configuration + @Bean方法完全可以取代xml文档的方式。
+
+```Java
+@Configuration
+public class ManConfig {
+    @Bean
+    public Man man() {
+        return new Man(person());
+    }
+    @Bean
+    public Person person() {
+        return new Person();
+    }
+}
+
+//从java注解的配置中加载配置到容器
+ApplicationContext context = new AnnotationConfigApplicationContext(ManConfig.class);
+//从容器中获取对象实例
+Man man = context.getBean(Man.class);
+man.say();
+```
+
+
+
+#### 1.1.6 注入资源
+
+Spring不仅可以注入Bean、也可以注入资源（Resource）
+
+Spring提供了一个`org.springframework.core.io.Resource`（注意不是`javax.annotation.Resource`），它可以像`String`、`int`一样使用`@Value`注入：
+
+通过@Value()注解，注入文件如下：
+
+```java
+@Component
+public class AppService {
+    @Value("classpath:/logo.txt")
+    private Resource resource;
+
+    private String logo;
+
+    @PostConstruct
+    public void init() throws IOException {
+        try (var reader = new BufferedReader(
+                new InputStreamReader(resource.getInputStream(), StandardCharsets.UTF_8))) {
+            this.logo = reader.lines().collect(Collectors.joining("\n"));
+        }
+    }
+}
+```
+
+注入`Resource`最常用的方式是通过classpath，即类似`classpath:/logo.txt`表示在classpath中搜索`logo.txt`文件，然后，我们直接调用`Resource.getInputStream()`就可以获取到输入流，避免了自己搜索文件的代码。
+
+也可以直接指定文件的路径，例如：
+
+```java
+@Value("file:/path/to/logo.txt")
+private Resource resource;
+```
+
+
+
+#### 1.1.7 注入配置
+
+@Value()不仅可以注入资源，也可以注入我们在配置文件中写的资源，如在application.yml，application.properities中添加的配置，一般这些配置都是采用key-value的形式。
+
+如何使用？
+
+@PropertySource("配置文件名") // classpath下
+
+@Value("配置文件里的内容如key")
+
+例子如下：
+
+```java
+@Configuration
+@ComponentScan
+@PropertySource("app.properties") // 表示读取classpath的app.properties
+public class AppConfig {
+    @Value("${app.zone:Z}")
+    String zoneId;
+
+    @Bean
+    ZoneId createZoneId() {
+        return ZoneId.of(zoneId);
+    }
+}
+```
+
+Spring容器看到`@PropertySource("app.properties")`注解后，自动读取这个配置文件，然后，我们使用`@Value`正常注入：
+
+```java
+@Value("${app.zone:Z}")
+String zoneId;
+```
+
+注意注入的字符串语法，它的格式如下：
+
+- `"${app.zone}"`表示读取key为`app.zone`的value，如果key不存在，启动将报错；
+- `"${app.zone:Z}"`表示读取key为`app.zone`的value，但如果key不存在，就使用默认值`Z`。
+
+这样一来，我们就可以根据`app.zone`的配置来创建`ZoneId`。
+
+还可以把注入的注解写到方法参数中：
+
+```java
+@Bean
+ZoneId createZoneId(@Value("${app.zone:Z}") String zoneId) {
+    return ZoneId.of(zoneId);
+}
+```
+
+可见，先使用`@PropertySource`读取配置文件，然后通过`@Value`以`${key:defaultValue}`的形式注入，可以极大地简化读取配置的麻烦。
+
+另一种注入配置的方式是先通过一个简单的JavaBean持有所有的配置，例如，一个`SmtpConfig`：
+
+```
+@Component
+public class SmtpConfig {
+    @Value("${smtp.host}")
+    private String host;
+
+    @Value("${smtp.port:25}")
+    private int port;
+
+    public String getHost() {
+        return host;
+    }
+
+    public int getPort() {
+        return port;
+    }
+}
+```
+
+然后，在需要读取的地方，使用`#{smtpConfig.host}`注入：
+
+```
+@Component
+public class MailService {
+    @Value("#{smtpConfig.host}")
+    private String smtpHost;
+
+    @Value("#{smtpConfig.port}")
+    private int smtpPort;
+}
+```
+
+注意观察`#{}`这种注入语法，它和`${key}`不同的是，`#{}`表示从JavaBean读取属性。`"#{smtpConfig.host}"`的意思是，从名称为`smtpConfig`的Bean读取`host`属性，即调用`getHost()`方法。一个Class名为`SmtpConfig`的Bean，它在Spring容器中的默认名称就是`smtpConfig`，除非用`@Qualifier`指定了名称。
+
+使用一个独立的JavaBean持有所有属性，然后在其他Bean中以`#{bean.property}`注入的好处是，多个Bean都可以引用同一个Bean的某个属性。例如，如果`SmtpConfig`决定从数据库中读取相关配置项，那么`MailService`注入的`@Value("#{smtpConfig.host}")`仍然可以不修改正常运行。
+
+##### 1.1.7.1 注入资源+配置总结
+
+- @Value() + @PropertySource()可注入资源和配置
+- 注入方式有两种：
+  - 通过直接读取配置文件，如application.yml中的key-value来注入，需要用@PropertySource()声明配置文件，再用@Value()注入，注意@Value()里是$符号，表示从配置文件中读取
+  - 通过读取JavaBean来注入，如加了@Component的JavaBean，然后再使用的地方直接@Value()注入，注意@Value()里面是#符号，并且需要JavaBean的名称，表示从JavaBean里读取
+
+
+
+#### 1.1.8 条件装配
+
+简单点说，就是决定Bean何时种环境装配，何种环境不装配。
+
+主要使用的注解：
+
+- @Profile() ：决定Bean在什么环境下被装配
+- @Conditional ：决定是否创建某个Bean
+- @ConditionOnProperty()，@ConditionOnClass()等等·····
+
+
+
+**@Profile()**
+
+开发应用程序时，我们会使用开发环境，例如，使用内存数据库以便快速启动。而运行在生产环境时，我们会使用生产环境，例如，使用MySQL数据库。如果应用程序可以根据自身的环境做一些适配，无疑会更加灵活。
+
+Spring为应用程序准备了Profile这一概念，用来表示不同的环境。例如，我们分别定义开发、测试和生产这3个环境：
+
+- native
+- test
+- production
+
+创建某个Bean时，Spring容器可以根据注解`@Profile`来决定是否创建。例如，以下配置：
+
+```Java
+@Configuration
+@ComponentScan
+public class AppConfig {
+    @Bean
+    @Profile("!test")
+    ZoneId createZoneId() {
+        return ZoneId.systemDefault();
+    }
+
+    @Bean
+    @Profile("test")
+    ZoneId createZoneIdForTest() {
+        return ZoneId.of("America/New_York");
+    }
+}
+```
+
+如果当前的Profile设置为`test`，则Spring容器会调用`createZoneIdForTest()`创建`ZoneId`，否则，调用`createZoneId()`创建`ZoneId`。注意到`@Profile("!test")`表示非test环境。
+
+**重点：**在运行程序时，加上JVM参数`-Dspring.profiles.active=test`就可以指定以`test`环境启动。
+
+
+
+**@Conditional**
+
+除了根据`@Profile`条件来决定是否创建某个Bean外，Spring还可以根据`@Conditional`决定是否创建某个Bean。
+
+例如，我们对`SmtpMailService`添加如下注解：
+
+```java
+@Component
+@Conditional(OnSmtpEnvCondition.class)
+public class SmtpMailService implements MailService {
+    ...
+}
+```
+
+它的意思是，如果满足`OnSmtpEnvCondition`的条件，才会创建`SmtpMailService`这个Bean。`OnSmtpEnvCondition`的条件是什么呢？我们看一下代码：
+
+```java
+public class OnSmtpEnvCondition implements Condition {
+    public boolean matches(ConditionContext context, AnnotatedTypeMetadata metadata) {
+        return "true".equalsIgnoreCase(System.getenv("smtp"));
+    }
+}
+```
+
+因此，`OnSmtpEnvCondition`的条件是存在环境变量`smtp`，值为`true`。这样，我们就可以通过环境变量来控制是否创建`SmtpMailService`。
+
+Spring只提供了`@Conditional`注解，具体判断逻辑还需要我们自己实现。Spring Boot提供了更多使用起来更简单的条件注解，例如，如果配置文件中存在`app.smtp=true`，则创建`MailService`：
+
+```java
+@Component
+@ConditionalOnProperty(name="app.smtp", havingValue="true")
+public class MailService {
+    ...
+}
+```
+
+如果当前classpath中存在类`javax.mail.Transport`，则创建`MailService`：
+
+```java
+@Component
+@ConditionalOnClass(name = "javax.mail.Transport")
+public class MailService {
+    ...
+}
+```
+
 
 
 ### 1.2 AOP
 
+如何理解AOP？
 
+AOP就是一个面向切面编程，可用于处理事务、打印日志等。
+
+在AOP编程中，会遇到的一些概念如下：
+
+- Aspect：切面，即一个横跨多个核心逻辑的功能，或者称之为系统关注点；
+- Joinpoint：连接点，即定义在应用程序流程的何处插入切面的执行；
+- Pointcut：切入点，即一组连接点的集合；
+- Advice：增强，指特定连接点上执行的动作；
+- Introduction：引介，指为一个已有的Java对象动态地增加新的接口；
+- Weaving：织入，指将切面整合到程序的执行流程中；
+- Interceptor：拦截器，是一种实现增强的方式；
+- Target Object：目标对象，即真正执行业务的核心逻辑对象；
+- AOP Proxy：AOP代理，是客户端持有的增强后的对象引用。
+
+**所以我们可以理解为AOP就是一个[代理模式](https://www.runoob.com/design-pattern/proxy-pattern.html)或一种拦截器！**
+
+
+
+#### 1.2.1 装配AOP
+
+要使用AOP，我们首先就是要通过Maven引入Spring对AOP的支持，如下：
+
+```xml
+<dependency>
+    <groupId>org.springframework</groupId>
+    <artifactId>spring-aspects</artifactId>
+    <version>${spring.version}</version>
+</dependency>
+```
+
+上述依赖会自动引入AspectJ，使用AspectJ实现AOP比较方便，因为它的定义比较简单。
+
+使用起来非常简单，只需要以下几个步骤：
+
+- 在实现AOP的类上添加`@Aspect`和`@Component`注解
+- 在具体AOP类的方法上添加范围，如`@Around()` `@Before()` `@After()` `@AfterReturning()` `@AfterThrowing()`，这也是拦截器的类型
+- **开启AOP代理模式**：`@EnableAspectJAutoProxy`
+- 实现具体的AOP方法，通常利用反射或者输出日志。
+
+一个例子如下：
+
+我们定义一个`LoggingAspect`：
+
+```java
+@Aspect
+@Component
+public class LoggingAspect {
+    // 在执行UserService的每个方法前执行:
+    @Before("execution(public * com.itranswarp.learnjava.service.UserService.*(..))")
+    public void doAccessCheck() {
+        System.err.println("[Before] do access check...");
+    }
+
+    // 在执行MailService的每个方法前后执行:
+    @Around("execution(public * com.itranswarp.learnjava.service.MailService.*(..))")
+    public Object doLogging(ProceedingJoinPoint pjp) throws Throwable {
+        System.err.println("[Around] start " + pjp.getSignature());
+        Object retVal = pjp.proceed();
+        System.err.println("[Around] done " + pjp.getSignature());
+        return retVal;
+    }
+}
+```
+
+观察`doAccessCheck()`方法，我们定义了一个`@Before`注解，后面的字符串是告诉AspectJ应该在何处执行该方法，这里写的意思是：执行`UserService`的每个`public`方法前执行`doAccessCheck()`代码。
+
+再观察`doLogging()`方法，我们定义了一个`@Around`注解，它和`@Before`不同，`@Around`可以决定是否执行目标方法，因此，我们在`doLogging()`内部先打印日志，再调用方法，最后打印日志后返回结果。
+
+在`LoggingAspect`类的声明处，除了用`@Component`表示它本身也是一个Bean外，我们再加上`@Aspect`注解，表示它的`@Before`标注的方法需要注入到`UserService`的每个`public`方法执行前，`@Around`标注的方法需要注入到`MailService`的每个`public`方法执行前后。
+
+紧接着，我们需要给`@Configuration`类加上一个`@EnableAspectJAutoProxy`注解：
+
+```java
+@Configuration
+@ComponentScan
+@EnableAspectJAutoProxy
+public class AppConfig {
+    ...
+}
+```
+
+Spring的IoC容器看到这个注解，就会自动查找带有`@Aspect`的Bean，然后根据每个方法的`@Before`、`@Around`等注解把AOP注入到特定的Bean中。执行代码，我们可以看到以下输出：
+
+```txt
+[Before] do access check...
+[Around] start void com.itranswarp.learnjava.service.MailService.sendRegistrationMail(User)
+Welcome, test!
+[Around] done void com.itranswarp.learnjava.service.MailService.sendRegistrationMail(User)
+[Before] do access check...
+[Around] start void com.itranswarp.learnjava.service.MailService.sendLoginMail(User)
+Hi, Bob! You are logged in at 2020-02-14T23:13:52.167996+08:00[Asia/Shanghai]
+[Around] done void com.itranswarp.learnjava.service.MailService.sendLoginMail(User)
+```
+
+这说明执行业务逻辑前后，确实执行了我们定义的Aspect（即`LoggingAspect`的方法）。
+
+
+
+#### 1.2.2 AOP原理
+
+既然我们说**AOP是一个代理模式**，那么它的原理就非常简单了
+
+AOP实际上是创建了一个**继承于目标方法的子类**（**代理对象**），我们一般称为XXProxy（XX为目标类），然后在该子类中**持有了原始实例的引用**。
+
+基于以上面的例子举例，这个代理对象，如下：
+
+```java
+public UserServiceAopProxy extends UserService {
+    private UserService target;
+    private LoggingAspect aspect;
+
+    public UserServiceAopProxy(UserService target, LoggingAspect aspect) {
+        this.target = target;
+        this.aspect = aspect;
+    }
+
+    public User login(String email, String password) {
+        // 先执行Aspect的代码:
+        aspect.doAccessCheck();
+        // 再执行UserService的逻辑:
+        return target.login(email, password);
+    }
+
+    public User register(String email, String password, String name) {
+        aspect.doAccessCheck();
+        return target.register(email, password, name);
+    }
+
+    ...
+}
+```
+
+
+
+#### 1.2.3 拦截器类型
+
+顾名思义，拦截器有以下类型：
+
+- @Before：这种拦截器先执行拦截代码，再执行目标代码。如果拦截器抛异常，那么目标代码就不执行了；
+- @After：这种拦截器先执行目标代码，再执行拦截器代码。无论目标代码是否抛异常，拦截器代码都会执行；
+- @AfterReturning：和@After不同的是，只有当目标代码正常返回时，才执行拦截器代码；
+- @AfterThrowing：和@After不同的是，只有当目标代码抛出了异常时，才执行拦截器代码；
+- @Around：能完全控制目标代码是否执行，并可以在执行前后、抛异常后执行任意拦截代码，可以说是包含了上面所有功能。
+
+
+
+#### 1.2.4 结合注解装配AOP
+
+在上面的例子中，我们采用`@Before(execution(* xxx.Xyz.*(..)))`的方法来装配AOP，但是这种方法写起来比较复杂，且不精确，以下我们将通过注解的的方式来装配AOP。
+
+以下以一个[廖大的例子](https://www.liaoxuefeng.com/wiki/1252599548343744/1310052317134882)来做演示：
+
+为了监控应用程序的性能，我们定义一个性能监控的注解：
+
+```java
+@Target(METHOD)
+@Retention(RUNTIME)
+public @interface MetricTime {
+    String value();
+}
+```
+
+在需要被监控的关键方法上标注该注解：
+
+```java
+@Component
+public class UserService {
+    // 监控register()方法性能:
+    @MetricTime("register")
+    public User register(String email, String password, String name) {
+        ...
+    }
+    ...
+}
+```
+
+然后，我们定义`MetricAspect`：
+
+```java
+@Aspect
+@Component
+public class MetricAspect {
+    @Around("@annotation(metricTime)")
+    public Object metric(ProceedingJoinPoint joinPoint, MetricTime metricTime) throws Throwable {
+        String name = metricTime.value();
+        long start = System.currentTimeMillis();
+        try {
+            return joinPoint.proceed();
+        } finally {
+            long t = System.currentTimeMillis() - start;
+            // 写入日志或发送至JMX:
+            System.err.println("[Metrics] " + name + ": " + t + "ms");
+        }
+    }
+}
+```
+
+注意`metric()`方法标注了`@Around("@annotation(metricTime)")`，它的意思是，符合条件的目标方法是带有`@MetricTime`注解的方法，因为`metric()`方法参数类型是`MetricTime`（**注意**参数名是`metricTime`不是`MetricTime`），我们通过它获取性能监控的名称。
+
+有了`@MetricTime`注解，再配合`MetricAspect`，任何Bean，只要方法标注了`@MetricTime`注解，就可以自动实现性能监控。运行代码，输出结果如下：
+
+```txt
+Welcome, Bob!
+[Metrics] register: 16ms
+```
+
+
+
+#### 1.2.5 [AOP避坑](https://www.liaoxuefeng.com/wiki/1252599548343744/1339039378571298)
+
+第一个坑：（主要看链接，廖大讲的很细）
+
+因为AOP是代理模式，持有的是原来实例的引用，由于AOP使用**CGLIB来自动构建原对象的代理对象，是直接生成字节码文件**，而原对象的创建是Java编译器自动加上了super方法继承了父对象的成员变量，要经历**源码-编译-字节码**的过程，所以代理对象的生成没有继承原对象的成员变量。所以我们启动AOP时，注入的是代理对象，那么而我们就没办法直接通过代理对象获取成员变量了，会报错，要使用get方法来获取。
+
+因此，正确使用AOP，我们需要一个避坑指南：
+
+1. 访问被注入的Bean时，总是调用方法而非直接访问字段；
+2. 编写Bean时，如果可能会被代理，就不要编写`public final`方法。
+
+
+
+由于Spring通过CGLIB实现代理类，我们要避免直接访问Bean的字段（通过方法来访问如get），以及由`final`方法带来的“未代理”问题。
+
+遇到CglibAopProxy的相关日志，务必要仔细检查，防止因为AOP出现NPE异常。
 
 
 
