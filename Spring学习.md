@@ -160,6 +160,60 @@ Spring的IoC容器同时支持**属性注入**和**构造方法注入**，并**�
 
 
 
+**问4**，[spring如何解决Bean的循环依赖](https://juejin.cn/post/6985337310472568839)？
+
+**答4**，采用**三级缓存策略**
+
+- 首先我们明确Spring Bean的加载过程如下：
+  - Spring**扫描**class得到BeanDefinition
+  - 根据得到的BeanDefinition去**生成bean**
+  - 首先根据class**推断构造方法**
+  - 根据推断出来的构造方法，**反射**，得到一个对象（暂时叫做原始对象）
+  - 填充原始对象中的属性（**依赖注入**）
+  - **如果原始对象中的某个方法被AOP了，那么则需要根据原始对象*生成一个代理对象***
+  -  把最终生成的**代理对象放入单例池**（源码中叫做singletonObjects）中，下次getBean时就直接从单例池拿即可
+
+- 我们所需要解决的循环依赖问题，就出现在**属性注入环节**，其问题表现为：
+
+  - ABean创建-->依赖了B属性-->触发BBean创建--->B依赖了A属性--->需要ABean（但ABean还在创建过程中），从而导致ABean创建不出来，BBean也创建不出来。
+
+- 但是Spring的**三级缓存策略**，帮助我们解决了**部分**的**循环依赖**问题。
+
+  - 首先，三级缓存是哪三级缓存？
+
+    - SingletonObject ————> 成品池
+    - earlySingletonObject ————> 半成品池子
+    - SingletonFactories ————> 缓存的是ObjectFactory，表示对象工厂，用来创建某个对象。
+
+  - 过程是怎样的呢？
+
+    - 首先，创建Bean的时候，依赖注入之前，就将Bean的**原始对象**（**半成品**）放入**earlySingletonObject**（**半成品池**）
+    - 之后，再进行依赖注入，如果，发现需要注入别的Bean，如果**SingletonObject**（**成品池**）有就直接拿来注入，没有就去**earlySingletonObject**（**半成品池**）拿，再没有就去生成另一个Bean，也进行上面的***生成半成品进入半成品池***，之后再注入。结束后之前的Bean再注入这个完成的Bean，完成注入。
+    - 最后，将**属性注入**完后的成品Bean，放入**SingletonObject**（**成品池**）
+
+    <img src="https://p3-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/f31926946e894c078a6857aa7729edeb~tplv-k3u1fbpfcp-zoom-in-crop-mark:4536:0:0:0.awebp" alt="img" style="zoom:50%;" />
+
+    - 但是我们发现只用了两级缓存，那么第三级缓存SingletonFactory是干嘛的呢？
+    - 其实这个**第三级的缓存**，适用于**解决spring的AOP问题**的，因为AOP会生成代理对象，持有原对象的引用，但是**如果A的原始对象注入给B的属性之后，A的原始对象进行了AOP产生了一个代理对象，此时就会出现，对于A而言，它的Bean对象其实应该是AOP之后的代理对象，而B的a属性对应的并不是AOP之后的代理对象，这就产生了冲突**（即A的Bean是代理对象，但是B持有的A的Bean却是原始对象，不是代理对象）
+      - AOP的一般过程是：A类--->生成一个普通对象-->属性注入-->基于切面生成一个代理对象-->把代理对象放入singletonObjects单例池中
+      - singletonFactories：缓存的是一个ObjectFactory，主要用来去生成原始对象进行了AOP之后得到的代理对象，在每个Bean的生成过程中，都会提前暴露一个工厂，这个工厂可能用到，也可能用不到，如果没有出现循环依赖依赖本bean，那么这个工厂无用，本bean按照自己的生命周期执行，执行完后直接把本bean放入singletonObjects中即可，如果出现了循环依赖依赖了本bean，则另外那个bean执行ObjectFactory提交得到一个AOP之后的代理对象(如果有AOP的话，如果无需AOP，则直接得到一个原始对象)
+
+    
+
+  - 总结一下三级缓存：
+
+    1. singletonObjects：缓存某个beanName对应的经过了完整生命周期的bean
+
+    2. earlySingletonObjects：缓存提前拿原始对象进行了AOP之后得到的代理对象，原始对象还没有进行属性注入和后续的BeanPostProcessor等生命周期
+
+    3. singletonFactories：缓存的是一个ObjectFactory，主要用来去生成原始对象进行了AOP之后得到的代理对象，在每个Bean的生成过程中，都会提前暴露一个工厂，这个工厂可能用到，也可能用不到，如果没有出现循环依赖依赖本bean，那么这个工厂无用，本bean按照自己的生命周期执行，执行完后直接把本bean放入singletonObjects中即可，如果出现了循环依赖依赖了本bean，则另外那个bean执行ObjectFactory提交得到一个AOP之后的代理对象(如果有AOP的话，如果无需AOP，则直接得到一个原始对象)。
+
+    4. 其实还要一个缓存，就是earlyProxyReferences，它用来记录某个原始对象是否进行过AOP了。
+
+
+
+
+
 #### 1.1.2 装配[Bean](https://www.liaoxuefeng.com/wiki/1252599548343744/1282382145519649)
 
 在Spring的IoC容器中，我们把所有组件统称为JavaBean，即配置一个组件就是配置一个Bean。
@@ -973,3 +1027,4 @@ man.say();
 **容器作为spring的核心**，需要配合上下文使用，spring提供了**多种容器**，而这些**容器的抽象，也就是我们如何操作管理容器就是上下文**，如BeanFactory、ApplicationContext。
 
 Spring也提供了多种向上下文注册的方式，如从**Xml中注册**，和基于**@Configuration和@Bean注解的注册方式**。使用时，我们只需要从ApplicationContext对象中获取对象即可（获取也可以通过类型和名称等多种方式），其使用是利用了**Java的反射**机制。
+
