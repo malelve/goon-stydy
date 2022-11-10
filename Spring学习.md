@@ -134,7 +134,7 @@ Spring的IoC容器同时支持**属性注入**和**构造方法注入**，并**�
 - 通过构造方法注入
 - 属性注入和构造方法注入混合使用
 
-
+##### 问答环节
 
 **问1**，为什么有了set方法、构造方法等注入来表示依赖关系，为什么还需要在xml文档？
 
@@ -206,11 +206,13 @@ Spring的IoC容器同时支持**属性注入**和**构造方法注入**，并**�
 
     2. earlySingletonObjects：缓存提前拿原始对象进行了AOP之后得到的代理对象，原始对象还没有进行属性注入和后续的BeanPostProcessor等生命周期
 
-    3. singletonFactories：缓存的是一个ObjectFactory，主要用来去生成原始对象进行了AOP之后得到的代理对象，在每个Bean的生成过程中，都会提前暴露一个工厂，这个工厂可能用到，也可能用不到，如果没有出现循环依赖依赖本bean，那么这个工厂无用，本bean按照自己的生命周期执行，执行完后直接把本bean放入singletonObjects中即可，如果出现了循环依赖依赖了本bean，则另外那个bean执行ObjectFactory提交得到一个AOP之后的代理对象(如果有AOP的话，如果无需AOP，则直接得到一个原始对象)。
+    3. singletonFactories：缓存的是一个ObjectFactory，主要用来去生成原始对象进行了AOP之后得到的代理对象，在每个Bean的生成过程中，都会提前暴露一个工厂，这个工厂可能用到，也可能用不到，如果没有出现循环依赖依赖本bean，那么这个工厂无用，本bean按照自己的生命周期执行，执行完后直接把本bean放入singletonObjects中即可，如果出现了循环依赖依赖了本bean，则另外那个bean执行ObjectFactory提交得到一个AOP之后的代理对象(如果有AOP的话，如果无需AOP，则直接得到一个原始对象)。（**如何理解第三级缓存？当出现AOP时，需要在二级缓存中存放的时代理对象的Bean实例，第三级缓存就是这个代理对象的Bean工厂，负责生成Bean实例并放入二级缓存**）
 
     4. 其实还要一个缓存，就是earlyProxyReferences，它用来记录某个原始对象是否进行过AOP了。
 
+[补一个流程图](https://www.bilibili.com/video/BV11e411F78C/?spm_id_from=333.1007.tianma.1-1-1.click&vd_source=cb5cce1bdc5ab99fce812684e0c31a2b)（AB互相依赖）
 
+<img src="C:\Users\pc\Desktop\知识累积\三级缓存的流程.png" alt="三级缓存" style="zoom:60%;" />
 
 
 
@@ -1027,4 +1029,160 @@ man.say();
 **容器作为spring的核心**，需要配合上下文使用，spring提供了**多种容器**，而这些**容器的抽象，也就是我们如何操作管理容器就是上下文**，如BeanFactory、ApplicationContext。
 
 Spring也提供了多种向上下文注册的方式，如从**Xml中注册**，和基于**@Configuration和@Bean注解的注册方式**。使用时，我们只需要从ApplicationContext对象中获取对象即可（获取也可以通过类型和名称等多种方式），其使用是利用了**Java的反射**机制。
+
+
+
+
+
+### 1.4 Spring链接数据库
+
+#### 1.4.1 Spring使用jdbc
+
+
+
+#### 1.4.2 Spring事务及事务传播级别
+
+Spring为啥要抽象出`PlatformTransactionManager`和`TransactionStatus`？原因是JavaEE除了提供JDBC事务外，它还支持**分布式事务JTA**（Java Transaction API）。分布式事务是指多个数据源（比如多个数据库，多个消息系统）要在分布式环境下实现事务的时候，应该怎么实现。分布式事务实现起来非常复杂，简单地说就是通过一个分布式事务管理器实现两阶段提交，但本身数据库事务就不快，基于数据库事务实现的分布式事务就慢得难以忍受，所以使用率不高。
+
+Spring为了同时支持JDBC和JTA两种事务模型，就抽象出`PlatformTransactionManager`。
+
+```java
+@Configuration
+@ComponentScan
+@PropertySource("jdbc.properties")
+public class AppConfig {
+    ...
+    @Bean
+    PlatformTransactionManager createTxManager(@Autowired DataSource dataSource) {
+        return new DataSourceTransactionManager(dataSource);
+    }
+}
+```
+
+使用编程的方式使用Spring事务仍然比较繁琐，更好的方式是通过声明式事务来实现。使用声明式事务非常简单，除了在`AppConfig`中追加一个上述定义的`PlatformTransactionManager`外，再加一个`@EnableTransactionManagement`就可以启用声明式事务：
+
+```Java
+@Configuration
+@ComponentScan
+@EnableTransactionManagement // 启用声明式
+@PropertySource("jdbc.properties")
+public class AppConfig {
+    ...
+}
+```
+
+然后，对需要事务支持的方法，加一个`@Transactional`注解：
+
+```java
+@Component
+public class UserService {
+    // 此public方法自动具有事务支持:
+    @Transactional
+    public User register(String email, String password, String name) {
+       ...
+    }
+}
+```
+
+或者更简单一点，直接在Bean的`class`处加上，表示所有`public`方法都具有事务支持：
+
+```java
+@Component
+@Transactional
+public class UserService {
+    ...
+}
+```
+
+Spring对一个声明式事务的方法，如何开启事务支持？原理仍然是AOP代理，即通过自动创建Bean的Proxy实现：
+
+```java
+public class UserService$$EnhancerBySpringCGLIB extends UserService {
+    UserService target = ...
+    PlatformTransactionManager txManager = ...
+
+    public User register(String email, String password, String name) {
+        TransactionStatus tx = null;
+        try {
+            tx = txManager.getTransaction(new DefaultTransactionDefinition());
+            target.register(email, password, name);
+            txManager.commit(tx);
+        } catch (RuntimeException e) {
+            txManager.rollback(tx);
+            throw e;
+        }
+    }
+    ...
+}
+```
+
+注意：声明了`@EnableTransactionManagement`后，不必额外添加`@EnableAspectJAutoProxy`。
+
+##### Spring事务
+
+- @Transactional注解，置于类或方法上，表示事务，可增添参数来表示，抛出什么错误会回滚，默认是RuntimeException
+- 事务边界：事务方法的开始及结束
+- 事务传播：
+  - 例如一个已经@Transactional标记的事务，如果再调用了一个@TransActional标记的事务，那么到底有几个事务被开启了？
+    - 答：只有一个，因为第一个事务开启后，第二个事务检测到第一个事务存在，就会自动加入第一个事务。这也是Spring的默认事务传播级别：REQUIRED
+
+##### Spring事务传播级别
+
+- `REQUIRED`：表示**如果当前没有事务，就创建一个新事务，如果当前有事务，就加入到当前事务中执行;**
+- `SUPPORTS`：表示**如果有事务，就加入到当前事务，如果没有，那也不开启事务执行**。这种传播级别可用于查询方法，因为SELECT语句既可以在事务内执行，也可以不需要事务；
+- `MANDATORY`：表示**必须要存在当前事务并加入执行，否则将抛出异常**。这种传播级别可用于核心更新逻辑，比如用户余额变更，它总是被其他事务方法调用，不能直接由非事务方法调用；
+- `REQUIRES_NEW`：表示**不管当前有没有事务，都必须开启一个新的事务执行**。如果当前已经有事务，那么当前事务会挂起，等新事务完成后，再恢复执行；
+- `NOT_SUPPORTED`：表示**不支持事务**，如果当前有事务，那么当前事务会**挂起**，等这个方法执行完成后，再恢复执行；
+- `NEVER`：和`NOT_SUPPORTED`相比，它**不但不支持事务，而且在监测到当前有事务时，会抛出异常拒绝执行**；
+- `NESTED`：表示**如果当前有事务，则开启一个嵌套级别事务，如果当前没有事务，则开启一个新事务**。
+
+上面这么多种事务的传播级别，其实默认的`REQUIRED`已经满足绝大部分需求，`SUPPORTS`和`REQUIRES_NEW`在少数情况下会用到，其他基本不会用到，因为把事务搞得越复杂，不仅逻辑跟着复杂，而且速度也会越慢。
+
+定义事务的传播级别也是写在`@Transactional`注解里的：
+
+```java
+@Transactional(propagation = Propagation.REQUIRES_NEW)
+public Product createProduct() {
+    ...
+}
+```
+
+##### Spring事务的传播机制
+
+**问**：Spring是如何传播事务的呢？
+
+**答**：实际上，Spring事务的传播机制是通过ThreadLocal实现的。
+
+Spring总是把JDBC相关的`Connection`和`TransactionStatus`实例绑定到`ThreadLocal`。如果一个事务方法从`ThreadLocal`未取到事务，那么它会打开一个新的JDBC连接，同时开启一个新的事务，否则，它就直接使用从`ThreadLocal`获取的JDBC连接以及`TransactionStatus`。
+
+换句话说，事务只能在当前线程传播，无法跨线程传播。
+
+
+
+#### 1.4.3 Spring的ORM
+
+**问**：ORM是什么？
+
+**答**：ORM是对象关系映射（Object Relationship Map）
+
+ORM 把数据库映射成对象。
+
+> - 数据库的表（table） --> 类（class）
+> - 记录（record，行数据）--> 对象（object）
+> - 字段（field）--> 对象的属性（attribute）
+
+- Hibernate
+- Mybatis
+- JPA
+
+| JDBC       | Hibernate      | JPA                  | MyBatis           |
+| :--------- | :------------- | :------------------- | :---------------- |
+| DataSource | SessionFactory | EntityManagerFactory | SqlSessionFactory |
+| Connection | Session        | EntityManager        | SqlSession        |
+
+
+
+#### 1.4.4 [设计ORM](https://www.liaoxuefeng.com/wiki/1252599548343744/1282383340896289)
+
+重要，值的反复看！！！
 
