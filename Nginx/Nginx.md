@@ -193,21 +193,100 @@ OK，上述理论讲了那么多，我们现在来实际实现下Nginx负载均�
 
 
 
+第一步，准备好两个web项目，分别设置端口号为8080、8081
+
+
+
+第二步，下载docker，拉去nginx镜像
+
+
+
+第三步，将docker容器中的niginx的`\etc\nginx\nginx.conf`和`\etc\nginx\conf.d\default.conf`拷贝到本地
+
+
+
+第四步：本地创建nginx文件夹，内部创建logs、html、conf三个文件，nginx.conf放在nginx目录下，default.conf文件放在conf目录下。
+
+
+
+第五步：新建nginx容器，并通过`-v`命令挂载本地nginx.conf和default.nginx文件，替换容器中文件，shell命令如下：
+
+以下命令，将本机目录挂载到docker容器中，并赋予权限
+
+```shell
+docker run --name Nginx -p 80:80 -d -v D://Nginx/nginx/nginx.conf:/etc/nginx/nginx.conf -v D://Nginx/nginx/conf/default.conf:/etc/nginx/conf.d/default.conf -v D://Nginx/nginx/logs:/var/log/nginx/ --privileged=true nginx
 ```
+
+- -v：挂载目录
+- --privileged：设置权限
+
+注意：**所启动的镜像，一定要写在最后**！！！！
+
+```
+/etc/nginx/nginx.conf/  # niginx.conf目录
+/etc/nginx/conf.d/default.conf/  # default.conf目录 
+/usr/share/nginx/html/  # 静态页面目录
+/var/log/nginx/  # 日志目录
+
+-v # 挂载目录
+--privileged = true  # 开放容器权限
+```
+
+
+
+
+
+第六步：修改本地的nginx.conf和default.conf文件，可同步到docker容器内，本次配置如下：
+
+```conf
 upstream testServer {
-        server localhost:8080 weight=10;
-        server localhost:8081 weight=2;
-    }
-    server {
-    location / {
-        root   html;
+        server 10.130.146.83:8080 weight=10;
+        server 10.130.146.83:8081 weight=2;
+}
+
+server {
+    listen        80;
+    server_name  10.130.146.83;
+    location / {	
+        root   /html;
         index  index.html index.htm;
         proxy_pass http://testServer; 
     }
-    }
+}
+
 ```
 
+```conf
+http{
+	upstream testServer {
+            server localhost:8080 weight=10;
+            server localhost:8081 weight=2;
+    }
+    server {
+        location / {
+            root   html;
+            index  index.html index.htm;
+            proxy_pass http://testServer; 
+        }
+    }
+}
+```
 
+- `upstream`：负载均衡
+- `weight`：权重
+- `proxy_pass`代理
+
+所以，我们这里采用的是加权轮询算法，默认是轮询算法。
+
+
+
+### 一个小bug
+
+在本次实操中，配置在nginx.conf中的端口不生效，因为，在nginx.conf文件最下方有这么一句话：`include/etc/nginx/conf.d/*.conf;`
+
+所以我们在default目录下配置端口，经过测试，生效
+
+这里挖个坑，以后来填。
 
 
 
@@ -221,8 +300,10 @@ Nginx加权轮询源码：https://github.com/nginx/nginx/blob/master/src/http/ng
 
 Nginx的加权轮询算法：https://blog.csdn.net/BlacksunAcheron/article/details/84439302
 
-Nginx服务器部署：https://juejin.cn/post/7029348407609131015
+Nginx服务器docker部署：https://juejin.cn/post/7029348407609131015
 
 Nginx.conf文件的结构及配置方式：https://www.runoob.com/w3cnote/nginx-setup-intro.html
 
 更多配置信息:https://www.bilibili.com/video/BV1934y1p7WG/?spm_id_from=333.337.search-card.all.click&vd_source=cb5cce1bdc5ab99fce812684e0c31a2b
+
+docker部署nginx踩坑：https://blog.csdn.net/weixin_41474364/article/details/121427352
